@@ -1,11 +1,14 @@
+const {getDefaultSpaceId} = require("../../../../../../apihub-components/users-storage/user");
 const IFlow = require('assistos').loadModule('flow', {}).IFlow;
 
-class GeneratePlan extends IFlow {
+class GenerateApplication extends IFlow {
     static flowMetadata = {
-        action: "Generate a Action Plan",
-        intent: "Generates a Action Plan"
+        action: "Generate a Book Template",
+        intent: "Generates a Book Template"
     };
-
+    // project-title
+// informative-text
+    // project-details
     static flowParametersSchema = {
         title: {
             type: "string",
@@ -23,8 +26,9 @@ class GeneratePlan extends IFlow {
 
     async userCode(apis, parameters) {
         try {
-
+            let sum = 0;
             const llmModule = apis.loadModule("llm");
+            const spaceModule = apis.loadModule('space')
             const documentModule = apis.loadModule("document");
 
             const ensureValidJson = async (jsonString, maxIterations = 1, jsonSchema = null) => {
@@ -80,36 +84,46 @@ class GeneratePlan extends IFlow {
             };
 
             const createChaptersPrompt = (generationTemplateStructure, bookData, bookGenerationInfo, generalLlmInfo) => {
-                const base = "You're a Scrum Manager. Your purpose is to generate a coding schema template based on user specifications" +
-                    ` which will be used to create a application. Your response should match this json schema: ${JSON.stringify(generationTemplateStructure)}.
-                    Under no circumstance should your response include any other information than the json response schema.
-                    Please give me a JSON response without including any code blocks or the \`\`\`json syntax.`;
-                const specialInstructions = `Special Configuration: ${generalLlmInfo}`;
+                const base = `You are an IT Manager tasked with creating a clear, professional schema plan for a software application based on specific requirements.` +
+                    ` The goal is to produce a structured plan that is both logical and concise.` +
+                    ` Additionally, if the chapter information would benefit a technical diagram, set "requiresDiagrams" to "Yes" regardless of its original value.` +
+                    ` Ensure this convention is strictly followed for all technical chapters.` +
+                    ` Your response must match the following JSON schema exactly: ${JSON.stringify(generationTemplateStructure)}.` +
+                    ` Under no circumstances should your response include additional information, explanations, or code blocks.`;
+
+                const specialInstructions = `Special Configuration: ${generalLlmInfo}. Ensure the response includes no fewer than 10 chapters, structured and concise.`;
                 const bookDataInstructions = `Book Generation Specifications: ${bookGenerationInfo}`;
                 const bookInfo = `Book data: ${JSON.stringify(bookData)}`;
 
                 return [base, specialInstructions, bookDataInstructions, bookInfo].join("\n");
             };
 
+
+
             const createParagraphsPrompt = (generationTemplateStructure, bookData, chapterData, bookGenerationInfo, generalLlmInfo) => {
-                const base = "You're a book content Manager. Your purpose is to generate a list of paragraphs based on user specifications" +
-                    ` which will be part of a chapter used to create a book. Your response should match this json schema: ${JSON.stringify(generationTemplateStructure)}.
-                    But keep in mind that the number of paragraphs is variable and can be as many as you think is best for the chapter (even 1000).`;
+                const base = `You are an IT Manager responsible for developing a well-organized outline for software documentation.` +
+                    ` This outline will be part of a structured plan for a software application.` +
+                    ` Ensure this convention is strictly followed for all technical paragraphs.` +
+                    ` Your response must match the following JSON schema exactly: ${JSON.stringify(generationTemplateStructure)}.` +
+                    ` Under no circumstances should your response include additional information, explanations, or code blocks.`;
+
                 const specialInstructions = `Special Configuration: ${generalLlmInfo}`;
-                const bookDataInstructions = `General Book Generation Specifications: ${bookGenerationInfo}`;
+                const bookDataInstructions = `Book Generation Specifications: ${bookGenerationInfo}`;
                 const bookInfo = `Book data: ${JSON.stringify(bookData)}`;
                 const chapterInfo = `Chapter data: ${JSON.stringify(chapterData)}`;
-                const overrideParagraphCountBias = "If you have any bias towards the number of paragraphs you're inclined to generate, revoke it. " +
-                    "You should generate the number of paragraphs that you think is best for the chapter, and keep in mind this is the chapter of a book." +
-                    " And a chapter can have even 1000 paragraphs.";
+                const overrideParagraphCountBias = `Generate the appropriate number of paragraphs, ensuring each chapter is fully developed.` +
+                    ` There is no maximum limit, so include as many paragraphs as the chapter needs.`;
+
                 return [base, specialInstructions, bookDataInstructions, bookInfo, chapterInfo, overrideParagraphCountBias].join("\n");
             };
+
 
             const generationTemplateChapters = {
                 chapters: [
                     {
                         title: "String",
                         idea: "String",
+                        requiresDiagrams: "Yes/No"
                     }
                 ]
             };
@@ -124,11 +138,11 @@ class GeneratePlan extends IFlow {
 
             const bookGenerationInfo = parameters.configs.informativeText;
             const generalLlmInfo = parameters.configs.prompt;
-
+            const technicalDiagram = parameters.config.technicalDiagram;
             const bookData = parameters.configs;
 
             const documentObj = {
-                title: `template_${bookData.title}`,
+                title: `template_${bookData["project-title"]}`,
                 abstract: JSON.stringify({
                     ...bookData,
                     generationInfo: bookGenerationInfo,
@@ -150,6 +164,12 @@ class GeneratePlan extends IFlow {
 
             const chapters = JSON.parse(chaptersJsonString);
             for (const chapter of chapters.chapters) {
+                let isTechnicalChapter = 0;
+
+                if (chapter.requiresDiagrams === "Yes") {
+                    isTechnicalChapter = 1;
+                }
+
                 const chapterObj = {
                     title: chapter.title,
                     idea: chapter.idea,
@@ -170,13 +190,46 @@ class GeneratePlan extends IFlow {
                     const paragraphObj = {
                         text: paragraph.idea,
                     };
-                    await documentModule.addParagraph(parameters.spaceId, documentId, chapterId, paragraphObj);
+                    const paragraphId = await documentModule.addParagraph(parameters.spaceId, documentId, chapterId, paragraphObj);
+
+                }
+                if (isTechnicalChapter === 1) {
+                    const chapterName = "Technical Diagram";
+                    const imageObject = {
+                        "spaceId": parameters.spaceId,
+                        "prompt": `Generate a detailed technical diagram focusing on the core concept: "${chapterName}". Ensure the diagram provides clear technical details specific to this topic, with the wider context illustrating ${parameters.configs["informative-text"]}.`,
+                        "modelName": "DALL-E-3",
+                        "size": "1792x1024",
+                        "style": "natural",
+                        "quality": "standard",
+                        "variants": "1"
+                    }
+                    const response = await llmModule.generateImage(parameters.spaceId, imageObject)
+                    const imageId = response[0].id;
+                    const commandObj = {"image": {id: imageId, width: 1792, height: 1024}};
+                    await documentModule.updateParagraphCommands(parameters.spaceId, documentId, paragraphId, commandObj);
                 }
             }
+            // Add conclusion Diagram
+            const imageObject = {
+                "spaceId": parameters.spaceId,
+                "prompt": `Generate a high-level, "eagle's view" technical diagram that provides an overview of the entire application. Ensure the diagram presents a comprehensive architecture overview, including essential components and their relationships, while maintaining technical clarity. Illustrate the wider context with details on ${parameters.configs["informative-text"]}.`,
+                "modelName": "DALL-E-3",
+                "size": "1792x1024",
+                "style": "natural",
+                "quality": "standard",
+                "variants": "1"
+            }
+            const response = await llmModule.generateImage(parameters.spaceId, imageObject)
+            const imageId = response[0].id;
+            const commandObj = {"image": {id: imageId, width: 1792, height: 1024}};
+            await documentModule.updateParagraphCommands(parameters.spaceId, documentId, paragraphId, commandObj);
+
+
         } catch (e) {
             apis.fail(e);
         }
     }
 }
 
-module.exports = GenerateTemplate;
+module.exports = GenerateApplication;
